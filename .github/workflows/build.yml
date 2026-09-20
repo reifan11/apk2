@@ -48,13 +48,30 @@ jobs:
           print(f"✓ android.ndk = {ndk.group(1)}")
           EOF
 
-      - name: Pre-accept SDK licenses
+      - name: Install SDK cmdline-tools
         run: |
-          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
-          printf "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" \
-            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          printf "84831b9409646a918e30573bab4c9c91346d8abd\n" \
-            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          CMDLINE_DIR="$SDK_DIR/cmdline-tools/latest"
+          mkdir -p "$CMDLINE_DIR"
+
+          if [ -f "$CMDLINE_DIR/bin/sdkmanager" ]; then
+            echo "✓ cmdline-tools sudah ada di cache"
+          else
+            echo "→ Download cmdline-tools..."
+            wget -q --show-progress \
+              -O /tmp/cmdline-tools.zip \
+              "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-raw
+            mv /tmp/cmdline-tools-raw/cmdline-tools/* "$CMDLINE_DIR/"
+            rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools-raw
+            echo "✓ sdkmanager siap: $CMDLINE_DIR/bin/sdkmanager"
+          fi
+
+          yes | "$CMDLINE_DIR/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$CMDLINE_DIR/bin/sdkmanager" "platform-tools" > /dev/null
+
+          mkdir -p "$SDK_DIR/tools/bin"
+          ln -sf "$CMDLINE_DIR/bin/sdkmanager" "$SDK_DIR/tools/bin/sdkmanager" || true
 
       - name: Pre-download NDK r25b
         run: |
@@ -79,8 +96,10 @@ jobs:
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-r25b
+          ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
+          ANDROIDAPI: "33"
         run: |
-          export PATH="$JAVA_HOME/bin:$PATH"
+          export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           python3 -m buildozer -v android debug
 
       - name: Upload APK
