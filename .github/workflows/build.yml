@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
 
     steps:
       - uses: actions/checkout@v4
@@ -15,26 +15,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-ndk25b-v4-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-ndk25b-v4-
+          key: buildozer-ndk25b-v5-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-ndk25b-v5-
 
       - name: Add swap space
         run: |
           echo "Swap yang sudah ada:"
           sudo swapon --show || true
           free -h
-
-          if sudo swapon --show | grep -q "swapfile"; then
-            echo "✓ Runner sudah punya swap aktif, tambah swap ekstra"
-          fi
-
           sudo fallocate -l 6G /swapfile_extra 2>/dev/null || \
             sudo dd if=/dev/zero of=/swapfile_extra bs=1M count=6144
           sudo chmod 600 /swapfile_extra
           sudo mkswap /swapfile_extra
           sudo swapon /swapfile_extra
-
-          echo "Swap setelah ditambah:"
           free -h
 
       - name: Install system deps
@@ -66,11 +59,27 @@ jobs:
               c = re.sub(r'warn_on_root\s*=\s*\d', 'warn_on_root = 1', c)
           c = '\n'.join(l for l in c.splitlines()
                         if 'add_gradle_maven_repos' not in l)
+
+          # paksa p4a ke branch stabil, bukan develop (menghindari python versi terlalu baru/berat)
+          lines = c.splitlines()
+          new_lines, found = [], False
+          for l in lines:
+              if re.match(r'\s*#?\s*p4a\.branch\s*=', l):
+                  new_lines.append('p4a.branch = master')
+                  found = True
+              else:
+                  new_lines.append(l)
+          c = '\n'.join(new_lines)
+          if not found:
+              c += '\np4a.branch = master\n'
+
           spec.write_text(c)
           ndk = re.search(r'android\.ndk\s*=\s*(\S+)', c)
           arch = re.search(r'android\.archs\s*=\s*(.+)', c)
+          branch = re.search(r'p4a\.branch\s*=\s*(\S+)', c)
           print(f"✓ android.ndk = {ndk.group(1)}")
           print(f"✓ android.archs = {arch.group(1)}")
+          print(f"✓ p4a.branch = {branch.group(1)}")
           EOF
 
       - name: Install SDK cmdline-tools
@@ -106,16 +115,22 @@ jobs:
           if [ -d "$NDK_EXTRACTED" ]; then
             echo "✓ NDK r25b sudah ada di cache"
           else
-            echo "→ Download NDK r25b (~900 MB)..."
             wget --tries=5 --retry-connrefused --waitretry=10 \
               -q --show-progress \
               -O "/tmp/ndk.zip" \
               "https://dl.google.com/android/repository/android-ndk-r25b-linux.zip"
-            echo "→ Extracting..."
             unzip -q /tmp/ndk.zip -d "$NDK_DIR"
             rm /tmp/ndk.zip
             echo "✓ NDK siap: $NDK_EXTRACTED"
           fi
+
+      - name: Start resource monitor
+        run: |
+          (while true; do
+            { echo "=== $(date) ==="; free -h; echo "--- disk ---"; df -h /; echo; } >> monitor.log
+            sleep 120
+          done) &
+          echo $! > monitor.pid
 
       - name: Build APK
         env:
@@ -131,14 +146,20 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROIDNDK"
           export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           set -o pipefail
-          python3 -m buildozer -v android debug 2>&1 | tee build.log
+          timeout 4h python3 -m buildozer -v android debug 2>&1 | tee build.log
 
-      - name: Upload build log on failure
-        if: failure()
+      - name: Stop resource monitor
+        if: always()
+        run: kill "$(cat monitor.pid)" 2>/dev/null || true
+
+      - name: Upload diagnostics on failure
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
+          name: build-diagnostics
+          path: |
+            build.log
+            monitor.log
           retention-days: 3
 
       - name: Upload APK
