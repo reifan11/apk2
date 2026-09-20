@@ -15,8 +15,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-ndk25b-v3-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-ndk25b-v3-
+          key: buildozer-ndk25b-v4-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-ndk25b-v4-
+
+      - name: Add swap space
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Install system deps
         run: |
@@ -37,6 +45,11 @@ jobs:
           spec = pathlib.Path("buildozer.spec")
           c = spec.read_text()
           c = re.sub(r'android\.ndk\s*=\s*\S+', 'android.ndk = 25b', c)
+          # paksa single ABI dulu — hemat RAM, lebih stabil
+          if re.search(r'android\.archs\s*=', c):
+              c = re.sub(r'android\.archs\s*=.*', 'android.archs = arm64-v8a', c)
+          else:
+              c += '\nandroid.archs = arm64-v8a\n'
           if 'warn_on_root' not in c:
               c += '\nwarn_on_root = 1\n'
           else:
@@ -45,7 +58,9 @@ jobs:
                         if 'add_gradle_maven_repos' not in l)
           spec.write_text(c)
           ndk = re.search(r'android\.ndk\s*=\s*(\S+)', c)
+          arch = re.search(r'android\.archs\s*=\s*(.+)', c)
           print(f"✓ android.ndk = {ndk.group(1)}")
+          print(f"✓ android.archs = {arch.group(1)}")
           EOF
 
       - name: Install SDK cmdline-tools
@@ -64,7 +79,7 @@ jobs:
             unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-raw
             mv /tmp/cmdline-tools-raw/cmdline-tools/* "$CMDLINE_DIR/"
             rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools-raw
-            echo "✓ sdkmanager siap: $CMDLINE_DIR/bin/sdkmanager"
+            echo "✓ sdkmanager siap"
           fi
 
           yes | "$CMDLINE_DIR/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
@@ -98,9 +113,24 @@ jobs:
           ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-r25b
           ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
           ANDROIDAPI: "33"
+          ANDROIDMINAPI: "23"
         run: |
+          # bunuh NDK system runner biar tidak konflik dengan r25b kita
+          unset ANDROID_NDK_ROOT
+          unset ANDROID_NDK_HOME
+          export ANDROID_NDK_ROOT="$ANDROIDNDK"
+          export ANDROID_NDK_HOME="$ANDROIDNDK"
           export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-          python3 -m buildozer -v android debug
+          python3 -m buildozer -v android debug 2>&1 | tee build.log
+          echo "exit code: $?"
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 3
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
