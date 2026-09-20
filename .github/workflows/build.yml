@@ -1,0 +1,63 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache buildozer global
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-ndk25b-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-ndk25b-
+
+      - name: Install system deps
+        run: |
+          sudo apt-get install -y -q \
+            libtool libtool-bin libltdl-dev \
+            libssl-dev libffi-dev zlib1g-dev \
+            build-essential git zip unzip wget \
+            autoconf automake pkg-config cmake \
+            openjdk-17-jdk-headless
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+
+      - name: Install Python deps
+        run: pip install "cython==3.0.2" buildozer
+
+      - name: Patch buildozer.spec
+        run: |
+          sed -i 's/android\.ndk = .*/android.ndk = 25b/' buildozer.spec
+          grep -q 'warn_on_root' buildozer.spec || echo "warn_on_root = 1" >> buildozer.spec
+          sed -i 's/warn_on_root = 0/warn_on_root = 1/' buildozer.spec
+          sed -i '/add_gradle_maven_repos/d' buildozer.spec
+          echo "--- spec patch done ---"
+          grep 'android.ndk\|warn_on_root' buildozer.spec
+
+      - name: Pre-accept SDK licenses
+        run: |
+          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
+          echo -e "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" \
+            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" \
+            > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+
+      - name: Build APK
+        run: |
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          yes | python3 -m buildozer -v android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifikiller-v6-apk
+          path: bin/*.apk
+          retention-days: 7
