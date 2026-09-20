@@ -20,10 +20,21 @@ jobs:
 
       - name: Add swap space
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          echo "Swap yang sudah ada:"
+          sudo swapon --show || true
+          free -h
+
+          if sudo swapon --show | grep -q "swapfile"; then
+            echo "✓ Runner sudah punya swap aktif, tambah swap ekstra"
+          fi
+
+          sudo fallocate -l 6G /swapfile_extra 2>/dev/null || \
+            sudo dd if=/dev/zero of=/swapfile_extra bs=1M count=6144
+          sudo chmod 600 /swapfile_extra
+          sudo mkswap /swapfile_extra
+          sudo swapon /swapfile_extra
+
+          echo "Swap setelah ditambah:"
           free -h
 
       - name: Install system deps
@@ -45,7 +56,6 @@ jobs:
           spec = pathlib.Path("buildozer.spec")
           c = spec.read_text()
           c = re.sub(r'android\.ndk\s*=\s*\S+', 'android.ndk = 25b', c)
-          # paksa single ABI dulu — hemat RAM, lebih stabil
           if re.search(r'android\.archs\s*=', c):
               c = re.sub(r'android\.archs\s*=.*', 'android.archs = arm64-v8a', c)
           else:
@@ -115,14 +125,13 @@ jobs:
           ANDROIDAPI: "33"
           ANDROIDMINAPI: "23"
         run: |
-          # bunuh NDK system runner biar tidak konflik dengan r25b kita
           unset ANDROID_NDK_ROOT
           unset ANDROID_NDK_HOME
           export ANDROID_NDK_ROOT="$ANDROIDNDK"
           export ANDROID_NDK_HOME="$ANDROIDNDK"
           export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          set -o pipefail
           python3 -m buildozer -v android debug 2>&1 | tee build.log
-          echo "exit code: $?"
 
       - name: Upload build log on failure
         if: failure()
